@@ -61,6 +61,11 @@ import (
 	"k8s.io/utils/integer"
 
 	klog "k8s.io/klog/v2"
+
+	ctx "context"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	kube_client "k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -78,6 +83,36 @@ const (
 	podScaleUpDelayAnnotationKey = "cluster-autoscaler.kubernetes.io/pod-scale-up-delay"
 )
 
+type Smusher interface {
+	Smush() bool
+}
+
+type InPlacePodSmusher struct {
+	kubeClient kube_client.Interface
+}
+
+func NewInPlacePodSmusher(kc kube_client.Interface) Smusher {
+	return &InPlacePodSmusher{kubeClient: kc}
+}
+
+func (ips *InPlacePodSmusher) Smush() bool {
+	podsToResize := ips.getOverprovisionedPods()
+	for pod, patch := range podsToResize {
+		klog.Infof("DBG: Smushing pod '%s' with patch '%s'\n", pod, patch)
+		ips.kubeClient.CoreV1().Pods("default").Patch(ctx.TODO(), pod,
+			types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{})
+		return true
+	}
+	return false
+}
+
+func (ips *InPlacePodSmusher) getOverprovisionedPods() map[string]string {
+	//TODO: return underutilized (from metrics-server/prometheus) pods to patch (resize down) where the resize
+	//      recommendations are carefully crafted via supercalculus to ensure they also work in parallel universes
+	//DEMO-HACK: return 'default/pod1' recommending resize down CPU to 200m
+	return map[string]string{"pod1": `{"spec":{"containers":[{"name":"ctr", "resources":{"requests":{"cpu":"200m"}}}]}}`}
+}
+
 // StaticAutoscaler is an autoscaler which has all the core functionality of a CA but without the reconfiguration feature
 type StaticAutoscaler struct {
 	// AutoscalingContext consists of validated settings and options for this autoscaler
@@ -94,6 +129,7 @@ type StaticAutoscaler struct {
 	processorCallbacks      *staticAutoscalerProcessorCallbacks
 	initialized             bool
 	taintConfig             taints.TaintConfig
+	smusher                 Smusher
 }
 
 type staticAutoscalerProcessorCallbacks struct {
@@ -209,6 +245,7 @@ func NewStaticAutoscaler(
 		processorCallbacks:      processorCallbacks,
 		clusterStateRegistry:    clusterStateRegistry,
 		taintConfig:             taintConfig,
+		smusher:                 NewInPlacePodSmusher(autoscalingKubeClients.ClientSet),
 	}
 }
 
@@ -562,6 +599,12 @@ func (a *StaticAutoscaler) RunOnce(currentTime time.Time) caerrors.AutoscalerErr
 		scaleUpStatus.Result = status.ScaleUpInCooldown
 		klog.V(1).Info("Unschedulable pods are very new, waiting one iteration for more")
 	} else {
+		klog.Info("DBG: Checking if existing pods can be resized down before scaling up cluster...\n")
+		if a.smusher.Smush() {
+			klog.Info("DBG: Pods were resized down, waiting one iteration\n")
+			scaleUpStatus.Result = status.ScaleUpInCooldown
+			return nil
+		}
 		scaleUpStart := preScaleUp()
 		scaleUpStatus, typedErr = a.scaleUpOrchestrator.ScaleUp(unschedulablePodsToHelp, readyNodes, daemonsets, nodeInfosForGroups)
 		if exit, err := postScaleUp(scaleUpStart); exit {

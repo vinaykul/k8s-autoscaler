@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ca-ext-grpc-kubeadm-cloud-provider
+spec:
+  nodeName: master
+  hostNetwork: true
+  containers:
+  - name: ca-ext-grpc-kubeadm-cloud-provider
+    image: skiibum/ca-ext-grpc-kubeadm-cloud-provider-arm64:v0.1
+    command:
+      - /usr/local/bin/ca-ext-grpc-kubeadm-cloud-provider-arm64
+      - --address=127.0.0.1:8086
+      - --api-address=192.168.105.19:6443
+      - --cert-hash=sha256:58c7f2c68db3c04b8b5932c201e057623a35be1904904449d90d484f15f4e37e
+      - --token=d54mo1.v51e0dtayf25m842
+      - --v=4

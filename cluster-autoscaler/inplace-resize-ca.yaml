@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloud-config
+data:
+  external-grpc-kubeadm-cloud-provider-config.yaml: |
+    address: 127.0.0.1:8086
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cluster-autoscaler-inplace-resize
+spec:
+  nodeName: master
+  hostNetwork: true
+  containers:
+  - name: cluster-autoscaler-inplace-resize
+    image: skiibum/cluster-autoscaler-inplace-resize-arm64:v0.1
+    command:
+      - /cluster-autoscaler
+      - --cloud-provider=externalgrpc
+      - --kubeconfig=/config/admin.conf
+      - --cloud-config=/config/external-grpc-kubeadm-cloud-provider-config.yaml
+      - --scan-interval=1s
+    volumeMounts:
+    - name: kubeconfig-volume
+      mountPath: /config/admin.conf
+      readOnly: true
+      subPath: admin.conf
+    - name: cloud-config-volume
+      mountPath: /config
+      readOnly: true
+  volumes:
+  - name: kubeconfig-volume
+    hostPath:
+      path: /etc/kubernetes/admin.conf
+  - name: cloud-config-volume
+    configMap:
+      name: cloud-config
